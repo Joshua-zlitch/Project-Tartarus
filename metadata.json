@@ -1,0 +1,6 @@
+{
+  "name": "Project Tartarus — 2.5D AI Agent Arena",
+  "description": "A 2.5D top-down pixel art workspace and native desktop architecture boilerplate for AI coding agents powered by React, Phaser.js, Tauri v2, and Python FastAPI WebSockets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

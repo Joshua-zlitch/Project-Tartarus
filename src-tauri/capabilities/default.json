@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for Project Tartarus main window to spawn the PyInstaller tartarus-backend sidecar.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/tartarus-backend",
+          "sidecar": true
+        }
+      ]
+    },
+    "shell:allow-open"
+  ]
+}

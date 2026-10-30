@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for Project Tartarus: a full-screen 2.5D pixel-art Phaser circular arena workspace with a live WebSocket event injector panel and floating boilerplate code and terminal command drawer covering React, Vite, Tauri v2 sidecar, and Python FastAPI with PyInstaller packaging.",
+  "updatedAt":  "2026-10-30T13:17:25.517325042Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
