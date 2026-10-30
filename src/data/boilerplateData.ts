@@ -85,23 +85,634 @@ npx tauri init --app-name "Project Tartarus" --window-title "Project Tartarus" -
 
 export const BOILERPLATE_FILES: CodeFileItem[] = [
   {
+    id: 'main-jsx',
+    filename: 'main.jsx',
+    filepath: 'src/main.jsx',
+    language: 'jsx',
+    description: 'React entry point that auto-spawns the compiled PyInstaller tartarus-backend sidecar when running inside Tauri v2.',
+    code: `import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App.jsx';
+
+async function spawnTartarusSidecar() {
+  if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+    try {
+      const { Command } = await import('@tauri-apps/plugin-shell');
+      const sidecar = Command.sidecar('binaries/tartarus-backend');
+      await sidecar.spawn();
+    } catch (err) {
+      console.error('Failed to spawn Tartarus Python sidecar:', err);
+    }
+  }
+}
+
+spawnTartarusSidecar();
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);`
+  },
+  {
+    id: 'app-jsx',
+    filename: 'App.jsx',
+    filepath: 'src/App.jsx',
+    language: 'jsx',
+    description: 'Minimalist React workspace hosting the full-screen PhaserArena component and a single floating control panel for Initialize Zeus and Prompt Zeus.',
+    code: `import React, { useEffect, useRef, useState, useCallback } from 'react';
+import PhaserArena from './components/PhaserArena.jsx';
+
+const WS_URL = 'ws://127.0.0.1:8000/ws';
+
+export default function App() {
+  const arenaRef = useRef(null);
+  const wsRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+  const [prompt, setPrompt] = useState('');
+
+  const routeEventToArena = useCallback((payload) => {
+    arenaRef.current?.dispatchEventToScene(payload);
+  }, []);
+
+  const connectWebSocket = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+    }
+
+    const socket = new WebSocket(WS_URL);
+    wsRef.current = socket;
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        routeEventToArena(data);
+      } catch (err) {
+        console.error('Invalid WebSocket JSON:', err);
+      }
+    };
+
+    socket.onclose = () => {
+      reconnectTimerRef.current = setTimeout(connectWebSocket, 3000);
+    };
+  }, [routeEventToArena]);
+
+  useEffect(() => {
+    connectWebSocket();
+    return () => {
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+      }
+    };
+  }, [connectWebSocket]);
+
+  const handleInitializeZeus = () => {
+    const zeusSpawn = {
+      type: 'agent_spawn',
+      agent: {
+        id: 'agent-zeus',
+        name: 'Zeus',
+        role: 'Orchestrator',
+        state: 'orchestrating',
+        x: 0,
+        y: 0,
+        color: '#FEF08A',
+      },
+    };
+
+    routeEventToArena(zeusSpawn);
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(zeusSpawn));
+    }
+  };
+
+  const handlePromptSubmit = (e) => {
+    e.preventDefault();
+    const cleanPrompt = prompt.trim();
+    if (!cleanPrompt) return;
+
+    // Instant 0ms visual feedback: set Zeus to 'orchestrating' immediately
+    routeEventToArena({
+      type: 'agent_state',
+      agent: {
+        id: 'agent-zeus',
+        name: 'Zeus',
+        role: 'Orchestrator',
+        state: 'orchestrating',
+        x: 0,
+        y: 0,
+        color: '#FEF08A',
+      },
+    });
+
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'zeus_task',
+          prompt: cleanPrompt,
+        })
+      );
+    }
+
+    setPrompt('');
+  };
+
+  const handleAgentDragMove = useCallback((movedAgent) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'agent_move',
+          agent: movedAgent,
+        })
+      );
+    }
+  }, []);
+
+  return (
+    <div className="relative w-screen h-screen overflow-hidden bg-[#0B0F17] text-slate-100">
+      <PhaserArena ref={arenaRef} onAgentDragMove={handleAgentDragMove} />
+
+      {/* Single Minimalist Floating Panel */}
+      <aside
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        className="absolute top-4 left-4 z-20 w-80 bg-[#111827]/95 backdrop-blur-md border border-[#1E293B] rounded-xl p-4 shadow-2xl space-y-3.5"
+      >
+        <button
+          type="button"
+          onClick={handleInitializeZeus}
+          className="w-full px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs rounded-lg transition-colors cursor-pointer"
+        >
+          Initialize Zeus
+        </button>
+
+        <form onSubmit={handlePromptSubmit} className="space-y-1.5">
+          <label
+            htmlFor="prompt-zeus-input"
+            className="block text-xs font-medium text-slate-300"
+          >
+            Prompt Zeus
+          </label>
+          <div className="flex items-center gap-1.5">
+            <input
+              id="prompt-zeus-input"
+              type="text"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => e.stopPropagation()}
+              placeholder="Type a custom task..."
+              autoComplete="off"
+              className="w-full bg-[#0B0F17] border border-[#1E293B] focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={!prompt.trim()}
+              className="px-3 py-2 bg-amber-500 hover:bg-amber-400 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+            >
+              Submit
+            </button>
+          </div>
+        </form>
+      </aside>
+    </div>
+  );
+}`
+  },
+  {
+    id: 'phaser-arena-jsx',
+    filename: 'PhaserArena.jsx',
+    filepath: 'src/components/PhaserArena.jsx',
+    language: 'jsx',
+    description: 'Phaser.js 2.5D circular obsidian arena inside a React useEffect hook with static spawning, role labels, pop-in animations, and strict mouse drag-and-drop.',
+    code: `import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
+import Phaser from 'phaser';
+
+export const ARENA_RADIUS = 250;
+export const MAX_AGENT_RADIUS = ARENA_RADIUS - 26;
+
+const STATE_VISUAL_CONFIG = {
+  orchestrating: { ringHex: 0xfef08a, textHex: '#FEF08A', symbol: '⚡', pulseScale: 1.48, pulseDuration: 620 },
+  coding: { ringHex: 0x10b981, textHex: '#34D399', symbol: '</>', pulseScale: 1.34, pulseDuration: 820 },
+  moving: { ringHex: 0x38bdf8, textHex: '#38BDF8', symbol: '»', pulseScale: 1.55, pulseDuration: 420 },
+  reviewing: { ringHex: 0xa855f7, textHex: '#C084FC', symbol: '◈', pulseScale: 1.28, pulseDuration: 960 },
+  idle: { ringHex: 0x64748b, textHex: '#94A3B8', symbol: '⏸', pulseScale: 1.1, pulseDuration: 1500 },
+};
+
+class TartarusArenaScene extends Phaser.Scene {
+  constructor() {
+    super({ key: 'TartarusArenaScene' });
+    this.agentContainers = new Map();
+    this.agentDataMap = new Map();
+    this.draggingAgentIds = new Set();
+    this.center = { x: 0, y: 0 };
+    this.isCreated = false;
+  }
+
+  init(data) {
+    this.onAgentDragEnd = data?.onAgentDragEnd;
+    this.onReadyCallback = data?.onReadyCallback;
+  }
+
+  create() {
+    this.center = {
+      x: Math.round(this.scale.width / 2),
+      y: Math.round(this.scale.height / 2),
+    };
+
+    this.arenaGraphics = this.add.graphics();
+    this.dragConstraintRing = this.add.graphics();
+
+    this.generatePantheonPixelTextures();
+    this.renderCircularArena();
+    this.registerDragAndDropListeners();
+    this.isCreated = true;
+
+    if (this.onReadyCallback) {
+      this.onReadyCallback();
+    }
+
+    this.scale.on('resize', (gameSize) => {
+      this.center = {
+        x: Math.round(gameSize.width / 2),
+        y: Math.round(gameSize.height / 2),
+      };
+      this.renderCircularArena();
+      this.agentDataMap.forEach((agent, id) => {
+        const container = this.agentContainers.get(id);
+        if (container) {
+          container.setPosition(this.center.x + agent.x, this.center.y + agent.y);
+        }
+      });
+    });
+  }
+
+  clampCoordinatesToArena(relX, relY) {
+    const dist = Math.hypot(relX, relY);
+    if (dist > MAX_AGENT_RADIUS && dist > 0) {
+      const scale = MAX_AGENT_RADIUS / dist;
+      return { x: Math.round(relX * scale), y: Math.round(relY * scale) };
+    }
+    return { x: Math.round(relX), y: Math.round(relY) };
+  }
+
+  registerDragAndDropListeners() {
+    this.input.on('dragstart', (_pointer, gameObject) => {
+      const agentId = gameObject.getData('agentId');
+      if (!agentId) return;
+
+      this.draggingAgentIds.add(agentId);
+      this.tweens.killTweensOf(gameObject);
+      gameObject.setDepth(20).setAlpha(1).setScale(1.08);
+      this.applyAgentStateVisuals(gameObject, 'moving');
+
+      this.dragConstraintRing.clear();
+      this.dragConstraintRing.lineStyle(1.5, 0xf59e0b, 0.55);
+      this.dragConstraintRing.strokeCircle(this.center.x, this.center.y, MAX_AGENT_RADIUS);
+    });
+
+    this.input.on('drag', (_pointer, gameObject, dragX, dragY) => {
+      gameObject.setPosition(dragX, dragY);
+    });
+
+    this.input.on('dragend', (_pointer, gameObject) => {
+      const agentId = gameObject.getData('agentId');
+      if (!agentId) return;
+
+      this.draggingAgentIds.delete(agentId);
+      this.dragConstraintRing.clear();
+      gameObject.setDepth(5).setScale(1);
+
+      const clamped = this.clampCoordinatesToArena(
+        gameObject.x - this.center.x,
+        gameObject.y - this.center.y
+      );
+      const finalX = this.center.x + clamped.x;
+      const finalY = this.center.y + clamped.y;
+      gameObject.setPosition(finalX, finalY);
+
+      const existing = this.agentDataMap.get(agentId);
+      if (existing) {
+        const updatedAgent = {
+          ...existing,
+          state: 'moving',
+          x: clamped.x,
+          y: clamped.y,
+        };
+        this.agentDataMap.set(agentId, updatedAgent);
+        this.applyAgentStateVisuals(gameObject, updatedAgent.state);
+
+        if (this.onAgentDragEnd) {
+          this.onAgentDragEnd(updatedAgent);
+        }
+      }
+    });
+  }
+
+  generatePantheonPixelTextures() {
+    const palettes = {
+      zeus: { primary: 0xfef08a, trim: 0xffffff, eye: 0xffffff },
+      hephaestus: { primary: 0xf59e0b, trim: 0xfcd34d, eye: 0xfef3c7 },
+      helios: { primary: 0xeab308, trim: 0xfde047, eye: 0xfef9c3 },
+      hades: { primary: 0xa855f7, trim: 0xd8b4fe, eye: 0xf3e8ff },
+      poseidon: { primary: 0x38bdf8, trim: 0xbae6fd, eye: 0xe0f2fe },
+      athena: { primary: 0x22d3ee, trim: 0xcffafe, eye: 0xecfeff },
+    };
+
+    Object.entries(palettes).forEach(([key, pal]) => {
+      const texKey = 'pantheon-agent-' + key;
+      if (this.textures.exists(texKey)) return;
+
+      const g = this.make.graphics({ x: 0, y: 0 }, false);
+      g.fillStyle(0x090d16, 1).fillRect(4, 2, 16, 18);
+      g.fillStyle(pal.trim, 1).fillRect(7, 1, 10, 3);
+      g.fillStyle(pal.primary, 1).fillRect(6, 4, 12, 13);
+      g.fillStyle(0x090d16, 1).fillRect(7, 7, 10, 4);
+      g.fillStyle(pal.eye, 1).fillRect(8, 8, 3, 2).fillRect(13, 8, 3, 2);
+      g.fillStyle(pal.trim, 1).fillRect(2, 9, 3, 6).fillRect(19, 9, 3, 6);
+      g.fillStyle(0x334155, 1).fillRect(6, 20, 4, 3).fillRect(14, 20, 4, 3);
+      g.generateTexture(texKey, 24, 24);
+      g.destroy();
+    });
+  }
+
+  getTextureKeyForAgent(agent) {
+    const key = ((agent.id || '') + ' ' + (agent.name || '')).toLowerCase();
+    if (key.includes('zeus')) return 'pantheon-agent-zeus';
+    if (key.includes('athena')) return 'pantheon-agent-athena';
+    if (key.includes('hades')) return 'pantheon-agent-hades';
+    if (key.includes('helios')) return 'pantheon-agent-helios';
+    if (key.includes('poseidon')) return 'pantheon-agent-poseidon';
+    return 'pantheon-agent-hephaestus';
+  }
+
+  getRoleLabelForAgent(agent) {
+    if (agent.role && agent.role.trim()) return agent.role.trim();
+    const key = ((agent.id || '') + ' ' + (agent.name || '')).toLowerCase();
+    if (key.includes('zeus')) return 'Orchestrator';
+    if (key.includes('athena')) return 'Conversational / Chat';
+    if (key.includes('hephaestus')) return 'Database & Backend';
+    if (key.includes('helios')) return 'Frontend';
+    if (key.includes('hades')) return 'Systems & Security';
+    if (key.includes('poseidon')) return 'API & Network';
+    return 'Specialist';
+  }
+
+  renderCircularArena() {
+    const { x: cx, y: cy } = this.center;
+    const r = ARENA_RADIUS;
+    const g = this.arenaGraphics;
+    g.clear();
+
+    g.fillStyle(0x05080f, 0.85).fillCircle(cx, cy + 26, r + 26);
+    g.fillStyle(0x0d1322, 1).fillCircle(cx, cy + 18, r + 10);
+    g.fillStyle(0x1e293b, 1).fillCircle(cx, cy, r + 10);
+    g.lineStyle(3, 0x334155, 1).strokeCircle(cx, cy, r + 10);
+    g.fillStyle(0x111827, 1).fillCircle(cx, cy, r);
+    g.fillStyle(0x0f172a, 1).fillCircle(cx, cy, Math.round(r * 0.72));
+    g.fillStyle(0x131c31, 1).fillCircle(cx, cy, Math.round(r * 0.38));
+    g.lineStyle(2, 0xf59e0b, 0.35).strokeCircle(cx, cy, r - 6);
+  }
+
+  applyAgentStateVisuals(container, state) {
+    const key = (state || 'idle').toLowerCase();
+    const spec = STATE_VISUAL_CONFIG[key] || STATE_VISUAL_CONFIG.idle;
+
+    const pulseRing = container.getByName('statePulseRing');
+    if (pulseRing) {
+      this.tweens.killTweensOf(pulseRing);
+      pulseRing.setScale(1).setAlpha(0.9);
+      pulseRing.setStrokeStyle(2, spec.ringHex, 0.95);
+      pulseRing.setFillStyle(spec.ringHex, 0.14);
+      this.tweens.add({
+        targets: pulseRing,
+        scaleX: spec.pulseScale,
+        scaleY: spec.pulseScale,
+        alpha: 0.08,
+        duration: spec.pulseDuration,
+        repeat: -1,
+        ease: 'Sine.easeOut',
+      });
+    }
+
+    const stateBadge = container.getByName('stateBadge');
+    if (stateBadge) {
+      stateBadge.setText(spec.symbol + ' ' + key.toUpperCase());
+      stateBadge.setColor(spec.textHex);
+    }
+  }
+
+  handleServerEvent(payload) {
+    if (!this.isCreated) return;
+    if (payload.type === 'init_arena' && Array.isArray(payload.agents)) {
+      this.agentContainers.forEach((c) => c.destroy());
+      this.agentContainers.clear();
+      this.agentDataMap.clear();
+      payload.agents.forEach((ag) => this.upsertAgent(ag, 'agent_spawn'));
+    } else if (
+      (payload.type === 'agent_spawn' ||
+        payload.type === 'agent_move' ||
+        payload.type === 'agent_state') &&
+      payload.agent
+    ) {
+      this.upsertAgent(payload.agent, payload.type);
+    } else if (payload.type === 'arena_reset') {
+      this.agentContainers.forEach((c) => c.destroy());
+      this.agentContainers.clear();
+      this.agentDataMap.clear();
+    }
+  }
+
+  upsertAgent(agent, eventType) {
+    if (this.draggingAgentIds.has(agent.id) && eventType === 'agent_move') return;
+
+    const clamped = this.clampCoordinatesToArena(agent.x || 0, agent.y || 0);
+    const updatedAgent = {
+      ...agent,
+      role: this.getRoleLabelForAgent(agent),
+      x: clamped.x,
+      y: clamped.y,
+    };
+    this.agentDataMap.set(agent.id, updatedAgent);
+
+    const screenX = this.center.x + clamped.x;
+    const screenY = this.center.y + clamped.y;
+
+    if (this.agentContainers.has(agent.id)) {
+      const container = this.agentContainers.get(agent.id);
+      container.setPosition(screenX, screenY);
+
+      const roleTag = container.getByName('roleTag');
+      if (roleTag) roleTag.setText(updatedAgent.role);
+
+      const nameTag = container.getByName('nameTag');
+      if (nameTag) nameTag.setText(updatedAgent.name);
+
+      this.applyAgentStateVisuals(container, updatedAgent.state);
+      return;
+    }
+
+    const spec =
+      STATE_VISUAL_CONFIG[(updatedAgent.state || 'idle').toLowerCase()] ||
+      STATE_VISUAL_CONFIG.idle;
+    const shadow = this.add.ellipse(0, 12, 24, 9, 0x05080f, 0.8);
+    const statePulseRing = this.add
+      .ellipse(0, 10, 28, 12, spec.ringHex, 0.14)
+      .setStrokeStyle(2, spec.ringHex, 0.95)
+      .setName('statePulseRing');
+
+    const sprite = this.add
+      .image(0, 0, this.getTextureKeyForAgent(updatedAgent))
+      .setScale(1.2);
+
+    const roleTag = this.add
+      .text(0, -44, updatedAgent.role, {
+        fontFamily: 'monospace',
+        fontSize: '9px',
+        color: '#94A3B8',
+        backgroundColor: '#090D16E6',
+        padding: { x: 4, y: 1 },
+      })
+      .setOrigin(0.5)
+      .setName('roleTag');
+
+    const nameTag = this.add
+      .text(0, -27, updatedAgent.name, {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: updatedAgent.color || '#F8FAFC',
+        backgroundColor: '#0B0F17E6',
+        padding: { x: 5, y: 2 },
+      })
+      .setOrigin(0.5)
+      .setName('nameTag');
+
+    const stateBadge = this.add
+      .text(0, 24, spec.symbol + ' ' + (updatedAgent.state || 'idle').toUpperCase(), {
+        fontFamily: 'monospace',
+        fontSize: '10px',
+        color: spec.textHex,
+        backgroundColor: '#0B0F17CC',
+        padding: { x: 4, y: 1 },
+      })
+      .setOrigin(0.5)
+      .setName('stateBadge');
+
+    const container = this.add.container(screenX, screenY, [
+      shadow,
+      statePulseRing,
+      sprite,
+      roleTag,
+      nameTag,
+      stateBadge,
+    ]);
+    container.setDepth(5);
+    container.setData('agentId', updatedAgent.id);
+    container.setSize(40, 44);
+    container.setInteractive({
+      hitArea: new Phaser.Geom.Rectangle(-20, -22, 40, 44),
+      hitAreaCallback: Phaser.Geom.Rectangle.Contains,
+      draggable: true,
+      useHandCursor: true,
+    });
+    this.input.setDraggable(container);
+
+    this.agentContainers.set(agent.id, container);
+    this.applyAgentStateVisuals(container, updatedAgent.state);
+
+    // Subtle pop-in scale & fade-in animation on spawn
+    container.setScale(0.35).setAlpha(0);
+    this.tweens.add({
+      targets: container,
+      scaleX: 1,
+      scaleY: 1,
+      alpha: 1,
+      duration: 240,
+      ease: 'Back.easeOut',
+    });
+  }
+}
+
+const PhaserArena = forwardRef(({ onAgentDragMove }, ref) => {
+  const containerRef = useRef(null);
+  const gameRef = useRef(null);
+  const pendingEventsRef = useRef([]);
+  const dragCallbackRef = useRef(onAgentDragMove);
+
+  useEffect(() => {
+    dragCallbackRef.current = onAgentDragMove;
+  }, [onAgentDragMove]);
+
+  useEffect(() => {
+    if (!containerRef.current || gameRef.current) return;
+
+    const game = new Phaser.Game({
+      type: Phaser.AUTO,
+      parent: containerRef.current,
+      width: containerRef.current.clientWidth || window.innerWidth,
+      height: containerRef.current.clientHeight || window.innerHeight,
+      backgroundColor: '#0B0F17',
+      pixelArt: true,
+      antialias: false,
+      roundPixels: true,
+      input: { keyboard: false },
+      scale: {
+        mode: Phaser.Scale.RESIZE,
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+      },
+      scene: [TartarusArenaScene],
+    });
+
+    game.events.once('ready', () => {
+      const scene = game.scene.getScene('TartarusArenaScene');
+      if (scene) {
+        scene.scene.restart({
+          onAgentDragEnd: (agent) => dragCallbackRef.current?.(agent),
+          onReadyCallback: () => {
+            while (pendingEventsRef.current.length > 0) {
+              scene.handleServerEvent(pendingEventsRef.current.shift());
+            }
+          },
+        });
+      }
+    });
+
+    gameRef.current = game;
+    return () => {
+      game.destroy(true);
+      gameRef.current = null;
+    };
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    dispatchEventToScene: (event) => {
+      const scene = gameRef.current?.scene?.getScene('TartarusArenaScene');
+      if (scene && scene.isCreated) {
+        scene.handleServerEvent(event);
+      } else {
+        pendingEventsRef.current.push(event);
+      }
+    },
+  }));
+
+  return <div ref={containerRef} className="w-full h-full bg-[#0B0F17] overflow-hidden select-none" />;
+});
+
+export default PhaserArena;`
+  },
+  {
     id: 'main-py',
     filename: 'main.py',
     filepath: 'backend/main.py',
     language: 'python',
-    description: 'FastAPI WebSocket server integrating google-generativeai & python-dotenv for the Zeus orchestrator.',
-    code: `"""
-Project Tartarus — Complete FastAPI + WebSockets Backend (main.py)
-Integrates google-generativeai and python-dotenv for the Zeus Orchestrator:
-1. Loads GEMINI_API_KEY securely from .env via python-dotenv.
-2. When zeus_task is received, passes the user's text string to Gemini with the system instruction:
-   'You are Zeus. Analyze the task and return a strict JSON array of required agents based on these roles:
-   hephaestus (database/backend), helios (frontend), hades (systems/security), poseidon (API/network).'
-3. Parses the LLM's JSON array response in the backend.
-4. Loops through the returned array and broadcasts an agent_spawn WebSocket event for each selected agent.
-"""
-
-import os
+    description: 'FastAPI WebSocket server integrating async gemini-1.5-flash (generate_content_async) and PyInstaller --onefile support.',
+    code: `import os
 import sys
 import re
 import math
@@ -111,7 +722,7 @@ import asyncio
 import multiprocessing
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -120,7 +731,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 
-# 1. Securely load GEMINI_API_KEY from .env (supports local dev & frozen PyInstaller .exe)
 def load_environment() -> Optional[str]:
     if getattr(sys, "frozen", False):
         exe_dir = Path(sys.executable).resolve().parent
@@ -143,14 +753,15 @@ ZEUS_SYSTEM_INSTRUCTION = (
     "(not related to databases, frontends, or networking), you must output [\\"athena\\"] in your strict JSON array."
 )
 
+GENERATION_CONFIG = {"response_mime_type": "application/json"}
+
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# Pre-initialize model with response_mime_type="application/json" for maximum speed
 ZEUS_MODEL = genai.GenerativeModel(
-    model_name=os.getenv("GEMINI_MODEL", "gemini-1.5-flash"),
+    model_name="gemini-1.5-flash",
     system_instruction=ZEUS_SYSTEM_INSTRUCTION,
-    generation_config={"response_mime_type": "application/json"},
+    generation_config=GENERATION_CONFIG,
 )
 
 ARENA_RADIUS = 250
@@ -219,7 +830,6 @@ def random_arena_coordinates(min_r: int = 55, max_r: int = 210) -> tuple[int, in
 
 
 def parse_llm_json_agent_array(raw_text: str) -> List[str]:
-    """Parses the Gemini LLM response into a validated list of Pantheon role keys."""
     cleaned = raw_text.strip()
     if not cleaned.startswith("["):
         bracket_match = re.search(r"\\[.*\\]", cleaned, flags=re.DOTALL)
@@ -242,13 +852,12 @@ def parse_llm_json_agent_array(raw_text: str) -> List[str]:
 def _sync_generate_json(task_prompt: str) -> str:
     response = ZEUS_MODEL.generate_content(
         task_prompt,
-        generation_config={"response_mime_type": "application/json"},
+        generation_config=GENERATION_CONFIG,
     )
     return response.text
 
 
 async def analyze_task_with_gemini_async(task_prompt: str) -> List[str]:
-    """Strictly non-blocking Gemini LLM call using generate_content_async with asyncio.to_thread fallback."""
     api_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not set in .env")
@@ -256,7 +865,7 @@ async def analyze_task_with_gemini_async(task_prompt: str) -> List[str]:
     try:
         response = await ZEUS_MODEL.generate_content_async(
             task_prompt,
-            generation_config={"response_mime_type": "application/json"},
+            generation_config=GENERATION_CONFIG,
         )
         raw_text = response.text
     except Exception:
@@ -281,7 +890,7 @@ class ConnectionManager:
     def __init__(self) -> None:
         self.active_connections: List[WebSocket] = []
         self.agents: Dict[str, Dict[str, Any]] = {}
-        self.background_tasks: set[asyncio.Task[Any]] = set()
+        self.background_tasks: Set[asyncio.Task[Any]] = set()
 
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -367,10 +976,8 @@ class ConnectionManager:
         now_iso = datetime.now(timezone.utc).isoformat()
 
         if event_type == "zeus_task":
-            clean_prompt = str(payload.get("prompt") or "").strip() or "General full-stack task"
-            # 1. Immediately broadcast Zeus's 'orchestrating' status on the WebSocket loop
+            clean_prompt = str(payload.get("prompt") or "").strip() or "General task"
             await self.broadcast_zeus_orchestrating(clean_prompt)
-            # 2. Await LLM JSON response in the background without blocking incoming WebSocket events
             bg_task = asyncio.create_task(self._resolve_llm_and_dispatch_spawns(clean_prompt))
             self.background_tasks.add(bg_task)
             bg_task.add_done_callback(self.background_tasks.discard)
@@ -411,490 +1018,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()`
-  },
-  {
-    id: 'dotenv-example',
-    filename: '.env',
-    filepath: 'backend/.env',
-    language: 'bash',
-    description: 'Environment file loaded by python-dotenv (load_dotenv()) in backend/main.py.',
-    code: `# Place this file at:
-# 1. backend/.env (during local Python development)
-# 2. project-tartarus/.env (project root)
-# 3. src-tauri/binaries/.env (next to the PyInstaller onefile executable)
-
-GEMINI_API_KEY="AIzaSyYourActualGeminiApiKeyHere"
-`
-  },
-  {
-    id: 'app-jsx',
-    filename: 'App.jsx',
-    filepath: 'src/App.jsx',
-    language: 'jsx',
-    description: 'React + Phaser.js client starting with an empty arena, Initialize Zeus button, and Prompt Zeus input emitting zeus_task WebSocket events.',
-    code: `import React, { useEffect, useRef, useState, useCallback } from 'react';
-import Phaser from 'phaser';
-
-const WS_URL = 'ws://127.0.0.1:8000/ws';
-const ARENA_RADIUS = 250;
-const MAX_AGENT_RADIUS = ARENA_RADIUS - 26;
-
-class TartarusArenaScene extends Phaser.Scene {
-  constructor() {
-    super({ key: 'TartarusArenaScene' });
-    this.agentSprites = new Map();
-    this.agentData = new Map();
-    this.agentProgress = new Map();
-    this.lastDragPoint = new Map();
-    this.isReady = false;
-  }
-
-  init(data) {
-    this.onReady = data?.onReady;
-    this.onAgentDragEnd = data?.onAgentDragEnd;
-  }
-
-  create() {
-    this.center = { x: this.scale.width / 2, y: this.scale.height / 2 };
-    this.arenaGraphics = this.add.graphics();
-    this.drawCircularArena(this.center.x, this.center.y, ARENA_RADIUS);
-    this.isReady = true;
-
-    this.input.on('dragstart', (_pointer, gameObject) => {
-      const agentId = gameObject.getData('agentId');
-      if (agentId) {
-        this.lastDragPoint.set(agentId, { x: gameObject.x, y: gameObject.y });
-        this.agentProgress.set(agentId, {
-          active: true,
-          progress: 0.05,
-          duration: 2200,
-          hex: 0x38bdf8,
-        });
-      }
-    });
-
-    this.input.on('drag', (_pointer, gameObject, dragX, dragY) => {
-      gameObject.setPosition(dragX, dragY);
-      const agentId = gameObject.getData('agentId');
-      const existing = this.agentData.get(agentId);
-      const lastPt = this.lastDragPoint.get(agentId);
-      if (lastPt && Math.hypot(dragX - lastPt.x, dragY - lastPt.y) >= 10) {
-        const colorHex = Phaser.Display.Color.HexStringToColor(
-          existing?.color || '#FEF08A'
-        ).color;
-        this.drawPersistentMotionPath(lastPt.x, lastPt.y, dragX, dragY, colorHex);
-        this.lastDragPoint.set(agentId, { x: dragX, y: dragY });
-      }
-    });
-
-    this.input.on('dragend', (_pointer, gameObject) => {
-      const agentId = gameObject.getData('agentId');
-      const existing = this.agentData.get(agentId);
-      if (!existing) return;
-
-      const relX = gameObject.x - this.center.x;
-      const relY = gameObject.y - this.center.y;
-      const dist = Math.hypot(relX, relY);
-      const scale = dist > MAX_AGENT_RADIUS && dist > 0 ? MAX_AGENT_RADIUS / dist : 1;
-      const clampedX = Math.round(relX * scale);
-      const clampedY = Math.round(relY * scale);
-
-      const finalX = this.center.x + clampedX;
-      const finalY = this.center.y + clampedY;
-      const lastPt = this.lastDragPoint.get(agentId);
-      if (lastPt) {
-        const colorHex = Phaser.Display.Color.HexStringToColor(
-          existing.color || '#FEF08A'
-        ).color;
-        this.drawPersistentMotionPath(lastPt.x, lastPt.y, finalX, finalY, colorHex);
-        this.lastDragPoint.delete(agentId);
-      }
-
-      gameObject.setPosition(finalX, finalY);
-      const updated = { ...existing, state: 'moving', x: clampedX, y: clampedY };
-      this.agentData.set(agentId, updated);
-      this.agentProgress.set(agentId, {
-        active: true,
-        progress: 0.05,
-        duration: 2200,
-        hex: 0x38bdf8,
-      });
-
-      if (this.onAgentDragEnd) {
-        this.onAgentDragEnd(updated);
-      }
-    });
-
-    if (this.onReady) this.onReady(this);
-
-    this.scale.on('resize', (gameSize) => {
-      this.center = { x: gameSize.width / 2, y: gameSize.height / 2 };
-      this.drawCircularArena(this.center.x, this.center.y, ARENA_RADIUS);
-    });
-  }
-
-  update(_time, delta) {
-    if (!this.isReady) return;
-    const dt = Math.min(Math.max(delta, 4), 100);
-
-    this.agentProgress.forEach((prog, agentId) => {
-      const container = this.agentSprites.get(agentId);
-      if (!container) return;
-      const arc = container.getByName('progressArc');
-      if (!arc) return;
-
-      arc.clear();
-      if (!prog.active) return;
-
-      prog.progress += dt / prog.duration;
-      if (prog.progress > 1.12) {
-        prog.progress = 0;
-      }
-
-      const clamped = Phaser.Math.Clamp(prog.progress, 0, 1);
-      const startAngle = -Math.PI / 2;
-      const endAngle = startAngle + clamped * Math.PI * 2;
-
-      arc.lineStyle(4, 0x090d16, 0.9);
-      arc.strokeCircle(0, -1, 16);
-      arc.lineStyle(2, 0x1e293b, 0.95);
-      arc.strokeCircle(0, -1, 16);
-      arc.lineStyle(2.5, clamped >= 0.99 ? 0x10b981 : prog.hex, 0.98);
-      arc.beginPath();
-      arc.arc(0, -1, 16, startAngle, endAngle, false);
-      arc.strokePath();
-    });
-  }
-
-  drawPersistentMotionPath(fromX, fromY, toX, toY, colorHex) {
-    const dist = Math.hypot(toX - fromX, toY - fromY);
-    if (dist < 3) return;
-    const maxLen = 28;
-    const scale = dist > maxLen ? maxLen / dist : 1;
-    const tailX = toX - (toX - fromX) * scale;
-    const tailY = toY - (toY - fromY) * scale;
-
-    const trail = this.add.graphics();
-    trail.setDepth(2);
-    trail.lineStyle(2, colorHex, 0.65);
-    trail.lineBetween(tailX, tailY + 8, toX, toY + 8);
-
-    this.tweens.add({
-      targets: trail,
-      alpha: 0,
-      delay: 0,
-      duration: 220,
-      ease: 'Quad.easeOut',
-      onComplete: () => trail.destroy(),
-    });
-  }
-
-  drawCircularArena(cx, cy, radius) {
-    const g = this.arenaGraphics;
-    g.clear();
-    g.fillStyle(0x090d16, 1);
-    g.fillCircle(cx, cy + 16, radius + 10);
-    g.lineStyle(3, 0x334155, 1);
-    g.fillStyle(0x111827, 1);
-    g.fillCircle(cx, cy, radius);
-    g.strokeCircle(cx, cy, radius);
-    g.lineStyle(2, 0xf59e0b, 0.35);
-    g.strokeCircle(cx, cy, radius - 6);
-  }
-
-  handleServerEvent(payload) {
-    if (!this.isReady) return;
-    if (payload.type === 'init_arena' && Array.isArray(payload.agents)) {
-      payload.agents.forEach((agent) => this.upsertAgent(agent));
-    } else if (
-      (payload.type === 'agent_spawn' ||
-        payload.type === 'agent_move' ||
-        payload.type === 'agent_state') &&
-      payload.agent
-    ) {
-      this.upsertAgent(payload.agent);
-    } else if (payload.type === 'arena_reset') {
-      this.agentSprites.forEach((c) => c.destroy());
-      this.agentSprites.clear();
-      this.agentData.clear();
-      this.agentProgress.clear();
-    }
-  }
-
-  upsertAgent(agent) {
-    this.agentData.set(agent.id, agent);
-    const targetX = this.center.x + (agent.x || 0);
-    const targetY = this.center.y + (agent.y || 0);
-    const colorHex = Phaser.Display.Color.HexStringToColor(
-      agent.color || '#FEF08A'
-    ).color;
-
-    const stateKey = (agent.state || 'idle').toLowerCase();
-    const stateColors = {
-      orchestrating: { hex: 0xfef08a, text: '#FEF08A', symbol: '⚡', dur: 620 },
-      coding: { hex: 0x10b981, text: '#34D399', symbol: '</>', dur: 820 },
-      moving: { hex: 0x38bdf8, text: '#38BDF8', symbol: '»', dur: 420 },
-      reviewing: { hex: 0xa855f7, text: '#C084FC', symbol: '◈', dur: 960 },
-      idle: { hex: 0x64748b, text: '#94A3B8', symbol: '⏸', dur: 1500 },
-    };
-    const stateSpec = stateColors[stateKey] || stateColors.idle;
-
-    const showProgress = stateKey === 'moving' || stateKey === 'orchestrating';
-    this.agentProgress.set(agent.id, {
-      active: showProgress,
-      progress: showProgress ? 0.04 : 0,
-      duration: stateKey === 'moving' ? 2200 : 3400,
-      hex: stateSpec.hex,
-    });
-
-    if (this.agentSprites.has(agent.id)) {
-      const container = this.agentSprites.get(agent.id);
-      const pulseRing = container.getByName('statePulseRing');
-      if (pulseRing) {
-        this.tweens.killTweensOf(pulseRing);
-        pulseRing.setScale(1).setAlpha(0.9);
-        pulseRing.setStrokeStyle(2, stateSpec.hex, 0.95);
-        this.tweens.add({
-          targets: pulseRing,
-          scaleX: 1.4,
-          scaleY: 1.4,
-          alpha: 0.08,
-          duration: stateSpec.dur,
-          repeat: -1,
-        });
-      }
-      const stateBadge = container.getByName('stateBadge');
-      if (stateBadge) {
-        stateBadge.setText(
-          stateSpec.symbol + ' ' + stateKey.toUpperCase() + ' · (' + agent.x + ', ' + agent.y + ')'
-        );
-        stateBadge.setColor(stateSpec.text);
-      }
-
-      this.drawPersistentMotionPath(
-        container.x,
-        container.y,
-        targetX,
-        targetY,
-        colorHex
-      );
-      this.tweens.add({
-        targets: container,
-        x: targetX,
-        y: targetY,
-        duration: 240,
-        ease: 'Quad.easeOut',
-      });
-      return;
-    }
-
-    const shadow = this.add.ellipse(0, 10, 20, 8, 0x000000, 0.5);
-    const statePulseRing = this.add
-      .ellipse(0, 10, 26, 11, stateSpec.hex, 0.14)
-      .setStrokeStyle(2, stateSpec.hex, 0.95)
-      .setName('statePulseRing');
-    this.tweens.add({
-      targets: statePulseRing,
-      scaleX: 1.4,
-      scaleY: 1.4,
-      alpha: 0.08,
-      duration: stateSpec.dur,
-      repeat: -1,
-    });
-
-    const progressArc = this.add.graphics().setName('progressArc');
-
-    const body = this.add
-      .rectangle(0, 0, 18, 18, colorHex)
-      .setStrokeStyle(2, 0xffffff);
-    const label = this.add
-      .text(0, -24, agent.name || agent.id, {
-        fontFamily: 'monospace',
-        fontSize: '11px',
-        color: agent.color || '#F8FAFC',
-        backgroundColor: '#0F172A',
-        padding: { x: 4, y: 2 },
-      })
-      .setOrigin(0.5);
-    const stateBadge = this.add
-      .text(
-        0,
-        22,
-        stateSpec.symbol + ' ' + stateKey.toUpperCase() + ' · (' + agent.x + ', ' + agent.y + ')',
-        {
-          fontFamily: 'monospace',
-          fontSize: '10px',
-          color: stateSpec.text,
-        }
-      )
-      .setOrigin(0.5)
-      .setName('stateBadge');
-
-    const container = this.add.container(targetX, targetY, [
-      shadow,
-      statePulseRing,
-      progressArc,
-      body,
-      label,
-      stateBadge,
-    ]);
-    container.setData('agentId', agent.id);
-    container.setSize(36, 36);
-    container.setInteractive({
-      hitArea: new Phaser.Geom.Rectangle(-18, -18, 36, 36),
-      hitAreaCallback: Phaser.Geom.Rectangle.Contains,
-      draggable: true,
-      useHandCursor: true,
-    });
-    this.input.setDraggable(container);
-    this.agentSprites.set(agent.id, container);
-  }
-}
-
-export default function App() {
-  const gameContainerRef = useRef(null);
-  const phaserGameRef = useRef(null);
-  const pendingEventsRef = useRef([]);
-  const wsRef = useRef(null);
-  const [agents, setAgents] = useState([]);
-  const [prompt, setPrompt] = useState('');
-
-  const dispatchEvent = useCallback((payload, skipPhaser = false) => {
-    if (!skipPhaser) {
-      const scene = phaserGameRef.current?.scene?.getScene('TartarusArenaScene');
-      if (scene && scene.isReady) {
-        scene.handleServerEvent(payload);
-      } else {
-        pendingEventsRef.current.push(payload);
-      }
-    }
-
-    if (payload.type === 'init_arena' && Array.isArray(payload.agents)) {
-      setAgents(payload.agents);
-    } else if (
-      (payload.type === 'agent_spawn' ||
-        payload.type === 'agent_move' ||
-        payload.type === 'agent_state') &&
-      payload.agent
-    ) {
-      setAgents((prev) => {
-        const exists = prev.some((a) => a.id === payload.agent.id);
-        return exists
-          ? prev.map((a) => (a.id === payload.agent.id ? payload.agent : a))
-          : [...prev, payload.agent];
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!gameContainerRef.current || phaserGameRef.current) return;
-
-    const game = new Phaser.Game({
-      type: Phaser.AUTO,
-      parent: gameContainerRef.current,
-      width: window.innerWidth,
-      height: window.innerHeight,
-      backgroundColor: '#0B0F17',
-      pixelArt: true,
-      scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
-      scene: [TartarusArenaScene],
-    });
-
-    game.events.once('ready', () => {
-      const scene = game.scene.getScene('TartarusArenaScene');
-      scene.scene.restart({
-        onReady: (readyScene) => {
-          while (pendingEventsRef.current.length > 0) {
-            readyScene.handleServerEvent(pendingEventsRef.current.shift());
-          }
-        },
-        onAgentDragEnd: (movedAgent) => {
-          const msg = { type: 'agent_move', agent: movedAgent };
-          if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify(msg));
-          }
-          dispatchEvent(msg, true);
-        },
-      });
-    });
-
-    phaserGameRef.current = game;
-    return () => {
-      game.destroy(true);
-      phaserGameRef.current = null;
-    };
-  }, [dispatchEvent]);
-
-  useEffect(() => {
-    const socket = new WebSocket(WS_URL);
-    wsRef.current = socket;
-    socket.onmessage = (event) => {
-      try {
-        dispatchEvent(JSON.parse(event.data));
-      } catch (err) {
-        console.error('Invalid WS JSON:', err);
-      }
-    };
-    return () => socket.close();
-  }, [dispatchEvent]);
-
-  const handleInitializeZeus = () => {
-    const msg = {
-      type: 'agent_spawn',
-      agent: {
-        id: 'agent-zeus',
-        name: 'Zeus',
-        role: 'Orchestrator Prime',
-        state: 'orchestrating',
-        x: 0,
-        y: 0,
-        color: '#FEF08A',
-      },
-    };
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(msg));
-    } else {
-      dispatchEvent(msg);
-    }
-  };
-
-  const handlePromptZeus = (e) => {
-    e.preventDefault();
-    if (!prompt.trim()) return;
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'zeus_task', prompt }));
-    }
-    setPrompt('');
-  };
-
-  return (
-    <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
-      <div ref={gameContainerRef} style={{ width: '100%', height: '100%' }} />
-      <div style={{ position: 'absolute', top: 16, left: 16, color: '#fff', fontFamily: 'monospace' }}>
-        <button onClick={handleInitializeZeus}>Initialize Zeus</button>
-        <form onSubmit={handlePromptZeus} style={{ marginTop: 8 }}>
-          <label>
-            Prompt Zeus:
-            <input
-              type="text"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="e.g. Build database and frontend"
-            />
-          </label>
-          <button type="submit">Submit</button>
-        </form>
-        <ul>
-          {agents.map((a) => (
-            <li key={a.id} style={{ color: a.color }}>
-              {a.name}: ({a.x}, {a.y})
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}`
   },
   {
     id: 'tauri-conf',
@@ -942,21 +1065,5 @@ export default function App() {
     ]
   }
 }`
-  },
-  {
-    id: 'main-jsx',
-    filename: 'main.jsx',
-    filepath: 'src/main.jsx',
-    language: 'jsx',
-    description: 'React entry point mounting the root application container.',
-    code: `import React from 'react';
-import { createRoot } from 'react-dom/client';
-import App from './App.jsx';
-import './index.css';
-
-const container = document.getElementById('root');
-const root = createRoot(container);
-
-root.render(<App />);`
   }
 ];

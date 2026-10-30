@@ -5,10 +5,6 @@ import { AgentState, ArenaAgent, ArenaWebSocketEvent } from '../types/arena';
 export const ARENA_RADIUS = 250;
 export const MAX_AGENT_RADIUS = ARENA_RADIUS - 26;
 
-// Short rolling history cap and rapid alpha decay so drag trails vanish almost instantly behind the sprite
-const MAX_TRAIL_HISTORY = 5;
-const TRAIL_DECAY_PER_STEP = 0.14;
-
 // Task countdown durations (ms) for circular progress bar overlay
 const MOVING_PROGRESS_DURATION_MS = 2200;
 const ORCHESTRATING_PROGRESS_DURATION_MS = 3400;
@@ -35,13 +31,6 @@ interface StateVisualSpec {
   symbol: string;
   pulseScale: number;
   pulseDuration: number;
-}
-
-interface TrailPoint {
-  x: number;
-  y: number;
-  alpha: number;
-  color: number;
 }
 
 interface AgentProgressState {
@@ -107,13 +96,11 @@ const STATE_VISUAL_CONFIG: Record<string, StateVisualSpec> = {
 class TartarusArenaScene extends Phaser.Scene {
   private arenaGraphics!: Phaser.GameObjects.Graphics;
   private gridGraphics!: Phaser.GameObjects.Graphics;
-  private trailGraphics!: Phaser.GameObjects.Graphics;
   private selectionRing!: Phaser.GameObjects.Graphics;
   private dragConstraintRing!: Phaser.GameObjects.Graphics;
   private agentContainers: Map<string, Phaser.GameObjects.Container> = new Map();
   private agentDataMap: Map<string, ArenaAgent> = new Map();
   private draggingAgentIds: Set<string> = new Set();
-  private agentTrailHistories: Map<string, TrailPoint[]> = new Map();
   private agentProgressMap: Map<string, AgentProgressState> = new Map();
   private center = { x: 0, y: 0 };
   private showGrid = true;
@@ -146,12 +133,10 @@ class TartarusArenaScene extends Phaser.Scene {
     this.agentContainers.clear();
     this.agentDataMap.clear();
     this.draggingAgentIds.clear();
-    this.agentTrailHistories.clear();
     this.agentProgressMap.clear();
 
     this.arenaGraphics = this.add.graphics();
     this.gridGraphics = this.add.graphics();
-    this.trailGraphics = this.add.graphics().setDepth(2);
     this.dragConstraintRing = this.add.graphics();
     this.selectionRing = this.add.graphics();
 
@@ -185,15 +170,8 @@ class TartarusArenaScene extends Phaser.Scene {
     });
   }
 
-  /**
-   * Frame update loop:
-   * 1. Rapidly decays manual drag trail history buffer.
-   * 2. Advances and renders the circular progress bar overlay for agents in 'moving' or 'orchestrating' states.
-   */
   update(_time: number, delta: number) {
     if (!this.isCreated) return;
-
-    this.updateMotionTrails();
     this.updateAgentCircularProgressBars(delta);
   }
 
@@ -222,41 +200,6 @@ class TartarusArenaScene extends Phaser.Scene {
 
     this.time.delayedCall(580, () => {
       sparkEmitter.destroy();
-    });
-  }
-
-  private updateMotionTrails() {
-    if (!this.trailGraphics) return;
-    this.trailGraphics.clear();
-    if (this.agentTrailHistories.size === 0) return;
-
-    this.agentTrailHistories.forEach((history, agentId) => {
-      for (let i = history.length - 1; i >= 0; i--) {
-        history[i].alpha -= TRAIL_DECAY_PER_STEP;
-        if (history[i].alpha <= 0.02) {
-          history.splice(i, 1);
-        }
-      }
-
-      if (history.length === 0) {
-        this.agentTrailHistories.delete(agentId);
-        return;
-      }
-
-      for (let i = 1; i < history.length; i++) {
-        const prev = history[i - 1];
-        const curr = history[i];
-        const segmentAlpha = Math.min(curr.alpha, 0.65) * (i / history.length);
-        if (segmentAlpha > 0.03) {
-          this.trailGraphics.lineStyle(2, curr.color, segmentAlpha);
-          this.trailGraphics.lineBetween(
-            prev.x,
-            prev.y + 8,
-            curr.x,
-            curr.y + 8
-          );
-        }
-      }
     });
   }
 
@@ -404,35 +347,6 @@ class TartarusArenaScene extends Phaser.Scene {
     } else {
       existing.ringHex = spec.ringHex;
       existing.durationMs = durationMs;
-    }
-  }
-
-  private pushTrailSample(
-    agentId: string,
-    screenX: number,
-    screenY: number,
-    colorNum: number
-  ) {
-    let history = this.agentTrailHistories.get(agentId);
-    if (!history) {
-      history = [];
-      this.agentTrailHistories.set(agentId, history);
-    }
-
-    const last = history[history.length - 1];
-    if (last && Math.hypot(screenX - last.x, screenY - last.y) < 4) {
-      return;
-    }
-
-    history.push({
-      x: screenX,
-      y: screenY,
-      alpha: 0.75,
-      color: colorNum,
-    });
-
-    if (history.length > MAX_TRAIL_HISTORY) {
-      history.shift();
     }
   }
 
@@ -591,15 +505,10 @@ class TartarusArenaScene extends Phaser.Scene {
     };
   }
 
-  private clearAllMotionTrails() {
-    this.agentTrailHistories.clear();
-    if (this.trailGraphics) {
-      this.trailGraphics.clear();
-    }
-  }
-
   /**
-   * Manual mouse drag-and-drop is the ONLY allowed movement mechanism.
+   * Strict Drag-and-Drop Movement:
+   * Autonomous movement, Catmull-Rom splines, and movement trails are completely disabled.
+   * Agents only move when manually dragged by the user, emitting `agent_move` on `dragend`.
    */
   private registerDragAndDropListeners() {
     this.input.on(
@@ -617,14 +526,6 @@ class TartarusArenaScene extends Phaser.Scene {
         gameObject.setDepth(20);
         gameObject.setAlpha(1);
         gameObject.setScale(1.08);
-
-        const agent = this.agentDataMap.get(agentId);
-        const colorNum = Phaser.Display.Color.HexStringToColor(
-          agent?.color || '#F59E0B'
-        ).color;
-        this.agentTrailHistories.set(agentId, [
-          { x: gameObject.x, y: gameObject.y, alpha: 0.75, color: colorNum },
-        ]);
 
         this.applyAgentStateVisuals(gameObject, 'moving', true);
 
@@ -655,22 +556,6 @@ class TartarusArenaScene extends Phaser.Scene {
         if (!agentId) return;
 
         gameObject.setPosition(dragX, dragY);
-
-        const rawRelX = Math.round(dragX - this.center.x);
-        const rawRelY = Math.round(dragY - this.center.y);
-        const previewClamped = this.clampCoordinatesToArena(rawRelX, rawRelY);
-
-        const agent = this.agentDataMap.get(agentId);
-        const colorNum = Phaser.Display.Color.HexStringToColor(
-          agent?.color || '#F59E0B'
-        ).color;
-        this.pushTrailSample(
-          agentId,
-          this.center.x + previewClamped.x,
-          this.center.y + previewClamped.y,
-          colorNum
-        );
-
         this.drawSelectionHighlight();
       }
     );
@@ -954,7 +839,6 @@ class TartarusArenaScene extends Phaser.Scene {
     if (!this.isCreated) return;
 
     if (payload.type === 'init_arena' && Array.isArray(payload.agents)) {
-      this.clearAllMotionTrails();
       this.agentContainers.forEach((c) => c.destroy());
       this.agentContainers.clear();
       this.agentDataMap.clear();
@@ -968,7 +852,6 @@ class TartarusArenaScene extends Phaser.Scene {
     ) {
       this.upsertAgent(payload.agent, payload.type);
     } else if (payload.type === 'arena_reset') {
-      this.clearAllMotionTrails();
       this.agentContainers.forEach((c) => c.destroy());
       this.agentContainers.clear();
       this.agentDataMap.clear();
@@ -1006,7 +889,7 @@ class TartarusArenaScene extends Phaser.Scene {
 
   /**
    * Spawns or updates an agent statically in the arena.
-   * No autonomous pathing or movement tweens occur on spawn; only manual user dragging moves agents.
+   * No autonomous pathing, splines, or movement trails occur; only manual user dragging moves agents.
    */
   private upsertAgent(
     agent: ArenaAgent,
@@ -1318,8 +1201,8 @@ export const PhaserArena = forwardRef<PhaserArenaHandle, PhaserArenaProps>(
     return (
       <div
         ref={containerRef}
-        className="w-full h-full pixelated-canvas select-none"
-        aria-label="Project Tartarus 2.5D Circular Phaser Arena Canvas"
+        className="w-full h-full bg-[#0B0F17] overflow-hidden select-none"
+        aria-label="Project Tartarus 2.5D Circular Arena Canvas"
       />
     );
   }
